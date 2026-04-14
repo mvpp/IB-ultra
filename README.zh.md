@@ -325,209 +325,195 @@ python src/investment-banking-ultra/scripts/run_phase3_bundle.py --workdir .
 
 ---
 
-## 建议配置 — User Preference
+## 如何使用这个仓库
 
-**第一次使用前**，将以下内容粘贴进 Claude 用户偏好设置（Settings → Profile → Custom Instructions，或你的 `CLAUDE.md` 文件）。这可以防止 Context Compaction 后丢失建模状态：
+这个仓库现在不是“一个大而全的三表 skill”，而是一套模块化工作流：
 
-```
-## 3-Statements-Ultra — 断点恢复协议
-当我在使用 3-statements-ultra skill 构建三表模型时，
-每次发生 context compaction 后，你必须：
-1. 重新读取 3-statements-ultra SKILL.md，再写任何代码
-2. 打开 Excel 文件，读取 _State tab，确认精确的恢复点
-3. 读取 _model_log.md，恢复上一 session 的关键输出数字
-4. 读取 _pending_links.json，检查 BS→CF 的 Cash 回填是否待处理
-5. 用 RAW_MAP + ASM_MAP spot-check 验证行号，再使用任何行号
-6. IS/BS/CF 预测列单元格不得硬编码，每个单元格必须是字符串公式
-7. 只从下一个未完成步骤继续，不重跑已完成的部分
-不得依赖对话记忆来还原行号或中间计算结果。
-磁盘状态（_State、_model_log.md、_pending_links.json）永远是权威来源。
-```
+1. `investment-banking-ultra` 先检查当前目录，判断应该从哪个 phase 开始。
+2. `3-statements-ultra-sec` 负责完成 phase 1 的经营模型。
+3. `valuation-ultra` 或对应的 phase 2 行业扩展包负责完成估值。
+4. `investment-memo-ultra` 再把模型和估值产物整理成机构级 memo 包。
+
+如果你想走最稳定的端到端流程，建议从 orchestrator 开始，让它决定下一步该跑哪个 skill。
 
 ---
 
-## 快速开始
+## 给技术小白的一分钟心智模型
 
-说出以下任意触发词，Skill 自动接管：
+如果你第一次接触这套仓库，可以这样理解：
 
-```
-三表模型
-financial model
-3-statement model
-建模
-从零建模
-build a 3-statement model for [公司名]
-```
+- Phase 1 回答的是：“历史发生了什么？经营模型长什么样？”
+- Phase 2 回答的是：“在明确估值方法下，这家公司值多少钱？”
+- Phase 3 回答的是：“投资逻辑是什么？市场隐含了什么？后续该盯什么指标？”
+- Orchestrator 回答的是：“当前缺哪个 phase？下一步应该调用哪个 skill？”
 
-Skill 会先问你有哪些数据来源，然后引导你逐步完成 5 个 Session。
+所以这套流程不是：
 
-如果走完整的三阶段流程，一个实用顺序是：
+- “写一个超长 prompt，让模型一次性把所有事都做完”
+
+而是：
+
+1. 先建模
+2. 再估值
+3. 再写 memo
+4. skill 之间通过磁盘上的 artifacts 自动交接
+
+---
+
+## 第一次上手的配置清单
+
+如果你是在一台新机器上第一次配置，最短路径是：
+
+1. 在 `~/Programs/venv` 下创建独立 Python 环境
+2. 安装 README 里 `环境配置` 章节列出的依赖
+3. 在 `~/Programs/.env` 里写入 `SEC_EDGAR_EMAIL=...`
+4. 在同一个环境里执行一次 `notebooklm login`
+5. 把 `.skill` 文件安装到 Cowork / Claude Code
+6. 跑一遍 smoke-check 命令，确认脚本都能调用
+7. 每家公司单独放在一个干净目录里运行
+
+这七步完成后，这套 repo 就具备了本地可运行条件。
+
+---
+
+## 这些 Skill 应该怎么调用
+
+如果你不确定从哪里开始，先用 orchestrator：
 
 ```text
-1. "build a 3-statement model for COHR"
-2. 完成 Sessions A-E
-3. "value COHR using DCF and comps"
-4. 让 valuation-ultra 继续完成估值包
-5. "write the investment memo for COHR"
-6. 让 investment-memo-ultra 继续完成 memo pack、outline 和 QC
+Use investment-banking-ultra to start an end-to-end analysis for COHR.
+```
+
+如果你想直接调用某个 phase：
+
+- Phase 1：
+  `Use 3-statements-ultra-sec to build a 3-statement model for COHR from SEC filings.`
+- Phase 2 通用：
+  `Use valuation-ultra to value COHR with DCF, comps, and reverse DCF.`
+- Phase 2 专用扩展包：
+  `Use valuation-financials for JPM.`
+  `Use valuation-reit-property for PLD.`
+  `Use valuation-regulated-assets for a regulated utility.`
+  `Use valuation-asset-nav for an E&P company.`
+  `Use valuation-biotech-rnpv for a clinical-stage biotech.`
+  `Use valuation-sotp for a conglomerate.`
+- Phase 3：
+  `Use investment-memo-ultra to write the investment memo once phase 1 and phase 2 are complete.`
+
+如果你只是想要最稳妥的默认入口，还是这句：
+
+```text
+Use investment-banking-ultra and let it determine the next phase.
 ```
 
 ---
 
-## 五个 Session 构建流程
+## Phase 1 的定位
 
-| Session | 构建内容 | 做什么 | 时间 |
-|---------|---------|--------|------|
-| **A** | Raw_Info + Assumptions | 数据提取（NLM / Excel / Web）；颗粒度识别；假设参数设置 | 15–30 分钟 |
-| **B** | IS（利润表） | 各业务线收入、中国准则 R8 插项、少数股东损益 | 15–20 分钟 |
-| **C** | BS（资产负债表） | 资产负债表，货币资金暂为占位符；写入 `_pending_links.json` | 15–20 分钟 |
-| **D** | CF（现金流量表） | 逐年构建现金流；R3 Others 插项；BS 货币资金回填；9 项 QC 检查 | 15–25 分钟 |
-| **E** | Returns + Cross_Check + Summary | ROIC/ROE/DuPont；假设交叉验证；Summary Tab 链接 | 15–20 分钟 |
+`3-statements-ultra-sec` 是经营模型引擎。
 
-每个 Session **完全独立** — Session 之间可以关闭对话。状态保存在 Excel 的 `_State` Tab 和两个辅助文件（`_model_log.md`、`_pending_links.json`）中。
+适合这些场景：
 
----
+- 你要的是完整三表模型，不是快速填模板
+- 美股 / SEC 公司，希望以 SEC filings 为第一来源
+- 想用 NotebookLM 从同一批 filings 中抽历史财务和经营驱动
+- 希望支持多 session 断点续跑
 
-## 数据来源选择
+它的标准输出是：
 
-| 优先级 | 来源 | 配置成本 | Token 消耗 | 说明 |
-|--------|------|---------|-----------|------|
-| ✅ **首选** | **SEC filings -> NotebookLM** | 需要 NotebookLM 认证 + SEC 邮箱环境变量 | 极低 | 本分叉版对美股 / SEC 披露公司默认走这条 |
-| ✅ **次选** | **NotebookLM notebook**（已上传年报/财报） | 两步配置（见下方） | 极低 | 如果 filings 已经预载，这是很好的入口 |
-| ✅ **第三选择** | **Excel 历史数据**（IS/BS/CF 已整理） | 无 | 低 | 非 SEC 公司或追求速度时很好用 |
-| ✅ **兜底** | **Web**（Sina / Yahoo Finance） | 无 | 低 | 自动运行，始终作为交叉验证层 |
-| ⚠️ **Pro 用户慎用** | **直接上传完整 PDF**（年报、招股书全文） | 无 | 🔴 极高 | 200+ 页报告快速消耗 Context |
+- 一个包含 `Summary`、`Assumptions`、`IS`、`BS`、`CF`、`Returns`、`Cross_Check`、`Raw_Info`、`_Registry`、`_State` 的 Excel workbook
+- `_model_log.md`
+- `_pending_links.json`
 
-**为什么 SEC 优先？** 这样可以先把模型锚定在原始申报文件上，再让 NotebookLM 从同一批 SEC 文件里抽取结构化财务和管理层表述，来源更统一，假设也更容易自洽和追溯。
-
-**为什么这个分叉版仍然强调 NotebookLM？** 因为它不只是拿来读数字，更重要的是抽取经营驱动、管理层指引、资本开支计划、营运资本管理逻辑和竞争格局。在这个 fork 里，最佳做法是先把 SEC filings 送进 NotebookLM，再用这些回答去填 Raw_Info 和 Assumptions。
-
-1. **先完成一次 NotebookLM 认证**，这样 CLI 和 Python client 都能复用浏览器会话。
-2. **一次性 OAuth 认证**（约 5 分钟，只需做一次）：
-
-```bash
-pip install "notebooklm-py[browser]"
-python -m playwright install chromium
-notebooklm login
-notebooklm status --paths
-```
-
-认证后，如果是美股 / SEC 公司，可直接这样启动：
-
-```bash
-python scripts/sec_nlm_bootstrap.py --ticker COHR
-python scripts/nlm_extract_company_pack.py --notebook-id <NOTEBOOK_ID>
-```
-
-如果你的 env 文件就放在 `~/Programs/.env`，SEC bootstrap 脚本默认会从那里读取
-`SEC_EDGAR_EMAIL`。
+现在 orchestrator 会把这些 sidecar 和 `_State` checkpoint 视为 phase 1 完成标准的一部分，而不是可有可无的附件。
 
 ---
 
-## 输出 Excel 文件结构
+## Phase 2 的定位
 
-```
-[1] Summary        ← 公司简介、财务亮点、催化剂、风险
-[2] Assumptions    ← 所有预测驱动因子（唯一数据源）
-[3] IS             ← 利润表
-[4] BS             ← 资产负债表
-[5] CF             ← 现金流量表（间接法）
-[6] Returns        ← ROIC / ROE / ROA / DuPont 分析
-[7] Cross_Check    ← 假设参数与外部来源交叉验证日志
-[8] Raw_Info       ← 历史数据提取（建好后不再回读原始来源）
-[_Registry]        ← 数据来源台账（Session E 末尾构建）
-[_State]           ← Session 元数据（MODEL_COMPLETE 后删除）
-```
+`valuation-ultra` 是默认的 phase 2 估值引擎，适用于标准经营型公司。它覆盖：
 
----
+- valuation prep
+- cost of capital
+- DCF
+- comps
+- reverse DCF
+- football field
+- valuation QC
 
-## 核心规则（摘要）
+如果公司需要不同的估值机制，就不要硬套通用 DCF，而应切到对应扩展包：
 
-| 规则 | 说明 |
-|------|------|
-| **Rule Zero** | IS/BS/CF 所有预测单元格必须是 Excel 公式字符串，不得为数字 |
-| **R3 Others 插项** | CFO 中唯一允许的非现金调整插项；同时保证 BS CHECK 和 CF CHECK 均为 0 |
-| **R6 Cash 最后** | BS 货币资金在 Session D 之前始终为 0 占位符，Session D 从 CF 期末现金回填 |
-| **代码块行数限制** | 每个 Python 代码块最多 400 行，执行后再写下一块 |
-| **单一来源** | Raw_Info 完成后，所有数据只通过 `=Raw_Info!` 公式引用，不再回读原始来源 |
+- `valuation-financials`：银行、保险、账面价值驱动型金融公司
+- `valuation-reit-property`：REIT、地产平台、稳定化不动产
+- `valuation-regulated-assets`：公用事业和受监管基础设施
+- `valuation-asset-nav`：储量 / 资产净值驱动型资源公司
+- `valuation-biotech-rnpv`：临床阶段 biotech 和 pipeline 主导 pharma
+- `valuation-sotp`：conglomerate、holdco、mixed-model 公司
+
+Phase 2 是 script-first。计算量大的部分应该由仓库里的 Python 脚本完成，模型主要负责方法选择、peer 判断和投资解释。
 
 ---
 
-## 常见问题
+## Phase 3 的定位
 
-**Q：没有 NotebookLM 也能用吗？**
-可以。NotebookLM 是可选的。没有的话，Skill 自动降级到 Web（Sina / Yahoo Finance）作为主要数据源。
+`investment-memo-ultra` 是配套 memo skill，不是 phase 1 / phase 2 的替代品。
 
-**Q：我只有年度数据，但公司按季度披露，怎么处理？**
-Skill 通过 yfinance 自动识别颗粒度。只要任何来源显示有季度数据，就使用季度模式。Phase 0 时也可以手动确认。
+它期望先有完整的 phase 1 和 phase 2 产物，然后生成：
 
-**Q：Session 中途可以暂停、下次再继续吗？**
-可以。每个代码块执行后都会在 Excel 的 `_State` Tab 写入进度标记。每个 Session 启动时会自动找到上次完成的步骤并从下一步继续。
+- `memo_input_pack.json`
+- `quality_overlay.json`
+- `variant_view_frame.json`
+- `decision_framework.json`
+- `monitoring_dashboard.json`
+- `Investment_Memo.md`
+- `memo_qc.json`
 
-**Q：为什么要跑 5 个 Session，不能一次跑完吗？**
-季报模式的利润表每个 Section 就有 300+ 行 Python 代码。一次性生成会触及大模型的输出上限，代码被静默截断，Excel 文件写到一半没有任何报错。5 个 Session 逐段执行完全规避了这个问题。
-
-**Q：Session C 结束后 BS CHECK ≠ 0，是 bug 吗？**
-不是，这是预期行为。货币资金在 Session D 之前是 0 占位符，Session D 从 CF 期末现金回填后 BS CHECK 才会归零。不要在 Session C 里强行平衡资产负债表。
-
-**Q：US GAAP 公司（纽交所/纳斯达克）也支持吗？**
-支持。Phase 0 中使用标准 ticker 格式（如 `"AAPL"`），Skill 会自动识别 IFRS/US GAAP 并套用对应的利润表模板。
+memo 层同样是 script-first，像质量评分、行动区间、监控阈值和 memo QC 都尽量交给本地脚本做。
 
 ---
 
-## 与官方 `financial-analysis:3-statements` Skill 的对比
+## Artifact Handoff
 
-Claude 插件市场中有一个官方三表模型 Skill（`financial-analysis:3-statements`）。两者定位不同，质量标准差异显著。
+这套系统的标准交接链路是：
 
-### 官方 Skill 的优势
+1. Phase 1 先生成 workbook 和 sidecars。
+2. Phase 2 再生成通用估值产物，或某个行业扩展包的估值产物。
+3. bridge 脚本把这些文件标准化成 memo-ready pack。
+4. Phase 3 再从这个标准化 pack 生成 memo bundle。
 
-速度快。如果你已经有一个半填好的 Excel 模板，只需要把公式链接起来，官方 Skill 一个 Session 就能搞定，不需要任何配置。适合快速出一个粗略模型、对结构正确性要求不高的场景。
+这也是本仓库最核心的设计：skill 之间通过磁盘上的 artifacts 协作，而不是依赖对话记忆。
 
-### 本 Skill 的核心差异 — 为什么这些差异对严肃工作至关重要
+---
 
-**1. 货币资金永不倒推。**
+## Upstream 来源
 
-这是最根本的结构差异。官方 Skill 用倒推法计算货币资金：`Cash = 负债合计 + 所有者权益 − 非现金资产`。这样资产负债表表面上平衡了，但结构上是错的。用这种方式算出来的货币资金和实际现金生成能力毫无关系——它只是一个残差，只要任何其他科目稍有偏差，这个数就会把所有偏差吸收进去，严重失真。正确的做法是，货币资金必须等于现金流量表的期末现金，由完整的现金流量瀑布推导得出。本 Skill 无条件强制执行这一规则：Session C 中货币资金保留为占位符，Session D 从现金流量表回填，没有例外。
+这是一个 fork + extension 项目。
 
-**2. 收入按业务线拆分，各自独立驱动。**
+- Phase 1 fork 自 [`willpowerju-lgtm/3-statement-ultra-for-finance`](https://github.com/willpowerju-lgtm/3-statement-ultra-for-finance)，然后在这里改造成 SEC-first / NotebookLM-first 的工作流，并补上更严格的 artifact gating 和 resume 逻辑。
+- Phase 3 的 memo 结构和风格来源于 [`star23/Day1Global-Skills`](https://github.com/star23/Day1Global-Skills)，尤其是 `tech-earnings-deepdive` 和 `us-value-investing`，但在这里已经被重写成以 artifact 和本地脚本为核心的 memo workflow。
+- 各个 phase 2 行业扩展包、artifact bridge 和 `investment-banking-ultra` orchestrator 是这个仓库里新增的原生模块。
 
-官方 Skill 将收入作为一行处理。本 Skill 为每条业务线单独构建行，配有各自的 YoY 增速假设、量价拆分结构（如适用）以及季度模型的季节性比例。单行收入假设对于粗略估算尚可接受，但用于卖方研究或 IC Memo 时完全不够，因为你需要能单独压力测试各产品线或地区的表现。
+---
 
-**3. 所有预测单元格均为 Excel 公式，没有例外。**
+## 当前适用范围
 
-本 Skill 的 Rule Zero：IS/BS/CF 中没有任何预测单元格可以存数字。每个单元格必须是引用 Assumptions Tab 或其他单元格的字符串公式。官方 Skill 经常直接把数值写入预测单元格，这意味着一旦修改任何假设，受影响的单元格不会重新计算，因为它存的是数字不是公式。
+这个仓库最适合：
 
-**4. 原生支持中国会计准则。**
+- 机构风格的建模、估值、memo 一体化流程
+- 需要可重复 phase handoff 的工作方式
+- 希望模型、估值、memo 三者彼此对齐的场景
 
-中国会计准则利润表在"营业总成本"和"营业利润"之间存在若干科目（其他收益、信用减值损失、资产减值损失等），IFRS 和 US GAAP 中没有对应项。本 Skill 用专门的 R8 插项行来捕捉这部分差额——即来源中的营业利润与模型推导的 EBIT 之间的残差。用通用模板忽略这些科目，会导致 A 股和港股中国准则公司的 EBIT 系统性偏差。
+这个仓库不适合：
 
-**5. 9 项 QC 检查必须全部通过，模型才能标记为完成。**
+- 追求“一次对话 20 分钟出粗模”的场景
+- 跳过 phase 产物，直接生成一篇看起来完整的 memo
+- 把所有行业都当成普通 DCF 公司处理
 
-没有通过全部检查，模型无法写入 MODEL_COMPLETE 状态：BS CHECK = 0、CF CHECK = 0、NI CHECK ≈ 0、REV CHECK = 0、预测列硬编码扫描、NCI 连续性检查、公式完整性抽样检查、去除网格线检查、Summary Tab 零硬编码检查。官方 Skill 没有对应的质量门控。
+---
 
-**6. 少数股东权益始终滚动计算。**
+## 许可证
 
-如果公司存在少数股东，资产负债表上的少数股东权益必须每期复利累计：`NCI_期末 = NCI_期初 + 归属少数股东净利润 − 少数股东分红`。将预测期 NCI 设为零或直接用最后一期历史值延续是常见错误，会同时影响资产负债表和利润表中的归属计算。本 Skill 强制执行滚动公式，并在 QC-5 中验证。
-
-### 对比表
-
-| | `3-statements-ultra`（本 Skill） | `financial-analysis:3-statements`（官方） |
-|---|---|---|
-| 货币资金来源 | `= CF 期末现金`（始终如此） | 资产负债表残差倒推 |
-| 收入结构 | 按业务线拆分，各自独立驱动 | 单行 |
-| 预测单元格 | 100% Excel 公式 | 公式与硬编码混用 |
-| 中国准则支持 | 原生（R8 插项、营业利润对账） | 通用模板 |
-| QC 验证 | 9 项强制检查 | 无 |
-| NCI 滚动计算 | 强制执行 | 不保证 |
-| 季度颗粒度 | 完整支持（每年 35 列） | 仅年度 |
-| 配置成本 | 5 个 Session，约 1–2 小时 | 单 Session |
-| 适用场景 | IPO / 卖方研究质量模型 | 快速填充模板 |
-
-### 如何选择
-
-如果你需要在 20 分钟内出一个粗略模型，数字不需要经得起推敲，用官方 Skill。
-
-如果模型将用于 IC Memo、研究报告、投资者材料，或者任何会被人仔细检查是否平衡、假设是否正确传导的场景，用本 Skill。
+本 Skill 供个人和研究使用，不提供任何保证。由本 Skill 生成的财务模型在用于投资决策前，应经过独立核实。
 
 ---
 
